@@ -1,0 +1,64 @@
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Run weekly on Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+
+jobs:
+  secrets:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for comprehensive scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: true
+
+  shellcheck:
+    name: Shell Script Linting
+    runs-on: ubuntu-latest
+    # Only run if shell scripts exist
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for shell scripts
+        id: check_shell
+        run: |
+          if find . -type f \( -name "*.sh" -o -name "*.bash" \) -not -path "./.git/*" | grep -q .; then
+            echo "has_shell=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_shell=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run ShellCheck
+        if: steps.check_shell.outputs.has_shell == 'true'
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          ignore_paths: .git
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    # Only run on pull requests
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate

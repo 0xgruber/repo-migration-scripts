@@ -167,9 +167,29 @@ Excluded repositories are commented with `# EXCLUDED:` prefix - remove the prefi
 | `04-update-urls.sh` | Update GitLab URLs in code, config, and documentation |
 | `05-archive-gitlab-repos.sh` | Archive repos on GitLab |
 | `06-cleanup.sh` | Remove temporary files and directories |
+| `07-deploy-security-workflow.sh` | Deploy GitHub Actions security scanning to all repos |
 | `lib-config.sh` | Shared configuration library |
 
 Each script prompts to run the next step when complete.
+
+### Security Workflow
+
+This toolkit includes a standard GitHub Actions security workflow that should be deployed to **all repositories** (current and future).
+
+**Features:**
+- 🔒 **Secret scanning** with Gitleaks (full git history)
+- 🐚 **Shell script linting** with ShellCheck
+- 📦 **Dependency review** for pull requests
+- ⏰ **Weekly scheduled scans**
+
+**Deploy to all repositories:**
+```bash
+./07-deploy-security-workflow.sh
+```
+
+**For new repositories:** Copy `templates/security-workflow.yml` to `.github/workflows/security.yml`
+
+**Documentation:** See [SECURITY-WORKFLOW.md](SECURITY-WORKFLOW.md) for full details.
 
 ---
 
