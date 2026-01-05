@@ -755,9 +755,12 @@ update_urls_single_repo() {
     echo -e "${CYAN}Scanning $repo_name for GitLab URLs...${NC}"
     
     # Check if repo has any GitLab URLs
-    local url_count=$(grep -r "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" | wc -l || echo "0")
+    local url_count
+    url_count=$(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" | wc -l)
+    url_count="${url_count//[[:space:]]/}"  # Remove whitespace
+    url_count="${url_count:-0}"  # Default to 0 if empty
     
-    if [[ $url_count -eq 0 ]]; then
+    if [[ "$url_count" -eq 0 ]]; then
         print_success "No GitLab URLs found in $repo_name"
         return 0
     fi
