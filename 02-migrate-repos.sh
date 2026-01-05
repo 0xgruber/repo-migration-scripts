@@ -546,14 +546,23 @@ migrate_repository() {
         print_info "[DRY-RUN] Would verify migration"
     fi
     
-    # Step 7: Cleanup
+    # Step 7: Convert mirror clone to regular working copy (for use by other scripts)
     if [[ "$DRY_RUN" == false ]]; then
-        print_info "Cleaning up temporary files..."
-        rm -rf "${temp_dir}"
-        print_success "Cleanup complete"
-        log "INFO" "Cleanup completed for: $slug"
+        print_info "Converting mirror to working copy..."
+        cd "${temp_dir}"
+        
+        # Mirror clones are bare repos - convert to regular working copy
+        git config --bool core.bare false
+        git checkout HEAD -- . 2>/dev/null || true
+        
+        # Update origin to point to GitHub
+        git remote set-url origin "${github_url}"
+        
+        cd - > /dev/null
+        print_success "Working copy ready at: ${temp_dir}"
+        log "INFO" "Converted to working copy: ${temp_dir}"
     else
-        print_info "[DRY-RUN] Would clean up: ${temp_dir}"
+        print_info "[DRY-RUN] Would keep working copy at: ${temp_dir}"
     fi
     
     print_success "Migration completed: $slug"
@@ -714,10 +723,10 @@ EOF
 ## Next Steps
 
 1. **Verify Repositories**: Check each migrated repository on GitHub
-2. **Normalize Names**: Update display names to match URL slugs
-3. **Update Documentation**: Update GitLab URLs to GitHub URLs in all documentation
-4. **Update Local Repos**: Update local repository remotes to point to GitHub
-5. **Archive GitLab Repos**: Archive the migrated repositories on GitLab
+2. **Update Documentation**: Run \`./04-update-documentation.sh\` to update GitLab URLs
+3. **Update Local Repos**: Run \`./03-update-local-remotes.sh\` to update local remotes
+4. **Archive GitLab Repos**: Run \`./05-archive-gitlab-repos.sh\` to archive on GitLab
+5. **Cleanup**: Run \`./06-cleanup.sh\` to remove temporary files
 
 ---
 

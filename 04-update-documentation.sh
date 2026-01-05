@@ -75,8 +75,15 @@ for repo in "${REPOS_RAW[@]}"; do
     REPOS+=("$name")
 done
 
-# Use DOC_UPDATE_DIR from config instead of WORK_DIR
-WORK_DIR="${DOC_UPDATE_DIR}"
+# Use same WORK_DIR as migration script to reuse cloned repos
+# Falls back to DOC_UPDATE_DIR if specified, otherwise uses WORK_DIR
+if [[ -d "${WORK_DIR}" ]] && [[ "$(ls -A ${WORK_DIR} 2>/dev/null)" ]]; then
+    # Repos exist from migration, use them
+    CLONE_DIR="${WORK_DIR}"
+else
+    # No migration repos, use doc update dir
+    CLONE_DIR="${DOC_UPDATE_DIR:-${WORK_DIR}}"
+fi
 
 TOTAL_FILES_UPDATED=0
 TOTAL_REPLACEMENTS=0
@@ -113,14 +120,31 @@ print_info() {
 
 clone_repository() {
     local repo_name="$1"
-    local repo_dir="${WORK_DIR}/${repo_name}"
+    local repo_dir="${CLONE_DIR}/${repo_name}"
     
-    if [[ -d "$repo_dir" ]]; then
-        print_info "Repository already cloned: $repo_name"
+    # Check if already exists (from migration script 02)
+    if [[ -d "$repo_dir/.git" ]]; then
+        print_info "Using existing clone from migration: $repo_name"
+        # Make sure we're on the right branch
+        cd "$repo_dir"
+        git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
+        cd - > /dev/null
         return 0
     fi
     
+    # Check if bare/mirror repo exists (needs conversion)
+    if [[ -d "$repo_dir" ]] && [[ -f "$repo_dir/HEAD" ]]; then
+        print_info "Converting mirror clone to working copy: $repo_name"
+        cd "$repo_dir"
+        git config --bool core.bare false
+        git checkout HEAD -- . 2>/dev/null || true
+        cd - > /dev/null
+        return 0
+    fi
+    
+    # Clone fresh from GitHub
     print_info "Cloning $repo_name from GitHub..."
+    mkdir -p "${CLONE_DIR}"
     if git clone "git@github.com:${GITHUB_USER}/${repo_name}.git" "$repo_dir" &>/dev/null; then
         print_success "Cloned successfully"
         return 0
@@ -141,42 +165,46 @@ update_urls_in_file() {
     local file="$1"
     local repo_name="$2"
     
-    local changes=0
-    
     # Patterns to replace
-    # 1. HTTPS URLs: https://gitlab.vaultcloud.xyz/aarongruber/REPO
-    # 2. SSH URLs: git@gitlab.vaultcloud.xyz:aarongruber/REPO.git
-    # 3. General GitLab references
-    
     local gitlab_https="https://${GITLAB_HOST}/${GITLAB_USER}"
     local gitlab_ssh="git@${GITLAB_HOST}:${GITLAB_USER}"
     local github_https="https://github.com/${GITHUB_USER}"
     local github_ssh="git@github.com:${GITHUB_USER}"
     
+    # Count matches first
+    local https_count=$(grep -c "${GITLAB_HOST}/${GITLAB_USER}" "$file" 2>/dev/null || true)
+    local ssh_count=$(grep -c "${GITLAB_HOST}:${GITLAB_USER}" "$file" 2>/dev/null || true)
+    local total_matches=$((${https_count:-0} + ${ssh_count:-0}))
+    
     if [[ "$DRY_RUN" == true ]]; then
-        # Just count potential replacements
-        changes=$(grep -c "${GITLAB_HOST}/${GITLAB_USER}" "$file" 2>/dev/null || echo "0")
-        changes=$((changes + $(grep -c "${GITLAB_HOST}:${GITLAB_USER}" "$file" 2>/dev/null || echo "0")))
-        return $changes
+        # Just report count, don't modify
+        echo "$total_matches"
+        return 0
+    fi
+    
+    if [[ $total_matches -eq 0 ]]; then
+        echo "0"
+        return 0
+    fi
+    
+    # Perform replacements
+    local temp_file="${file}.tmp"
+    
+    # Replace HTTPS URLs
+    sed "s|https://${GITLAB_HOST}/${GITLAB_USER}/|${github_https}/|g" "$file" > "$temp_file"
+    
+    # Replace SSH URLs
+    sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|${github_ssh}/|g" "$temp_file"
+    
+    # Check if anything changed
+    if ! diff -q "$file" "$temp_file" &>/dev/null; then
+        mv "$temp_file" "$file"
+        echo "$total_matches"
+        return 0
     else
-        # Perform replacements
-        local temp_file="${file}.tmp"
-        
-        # Replace HTTPS URLs
-        sed "s|https://${GITLAB_HOST}/${GITLAB_USER}/|${github_https}/|g" "$file" > "$temp_file"
-        
-        # Replace SSH URLs
-        sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|${github_ssh}/|g" "$temp_file"
-        
-        # Check if anything changed
-        if ! diff -q "$file" "$temp_file" &>/dev/null; then
-            mv "$temp_file" "$file"
-            changes=$(diff -u "$file".orig "$file" 2>/dev/null | grep -c "^+" || echo "1")
-            return $changes
-        else
-            rm "$temp_file"
-            return 0
-        fi
+        rm -f "$temp_file"
+        echo "0"
+        return 0
     fi
 }
 
@@ -185,7 +213,7 @@ process_repository() {
     
     print_section "Processing: $repo_name"
     
-    local repo_dir="${WORK_DIR}/${repo_name}"
+    local repo_dir="${CLONE_DIR}/${repo_name}"
     
     # Clone repository
     if ! clone_repository "$repo_name"; then
@@ -252,8 +280,7 @@ process_repository() {
             cp "$file" "$file.orig"
         fi
         
-        update_urls_in_file "$file" "$repo_name"
-        local changes=$?
+        local changes=$(update_urls_in_file "$file" "$repo_name")
         
         if [[ $changes -gt 0 ]]; then
             print_success "Updated: $rel_path ($changes replacement(s))"
@@ -337,10 +364,10 @@ main() {
         echo ""
     fi
     
-    # Create working directory
+    # Create working directory if needed
     if [[ "$DRY_RUN" == false ]]; then
-        mkdir -p "$WORK_DIR"
-        print_info "Working directory: $WORK_DIR"
+        mkdir -p "$CLONE_DIR"
+        print_info "Working directory: $CLONE_DIR"
         echo ""
     fi
     
@@ -384,8 +411,8 @@ main() {
     fi
     
     if [[ "$DRY_RUN" == false ]]; then
-        print_info "Working directory: $WORK_DIR"
-        print_info "You can review the cloned repositories there"
+        print_info "Working directory: $CLONE_DIR"
+        print_info "Run ./06-cleanup.sh when done to remove temporary files"
     fi
     
     print_success "Documentation update process complete!"
