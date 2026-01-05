@@ -439,19 +439,47 @@ migrate_repository() {
     local temp_dir="${WORK_DIR}/${slug}"
     local github_url="git@${GITHUB_HOST}:${GITHUB_USER}/${slug}.git"
     
-    # Step 1: Clone from GitLab
-    print_info "Cloning from GitLab (mirror)..."
-    if [[ "$DRY_RUN" == true ]]; then
-        print_info "[DRY-RUN] Would run: git clone --mirror ${gitlab_url} ${temp_dir}"
-        log "INFO" "[DRY-RUN] Would clone: $gitlab_url"
-    else
-        if git clone --mirror "${gitlab_url}" "${temp_dir}" >> "${LOG_FILE}" 2>&1; then
-            print_success "Cloned from GitLab"
-            log "INFO" "Successfully cloned: $gitlab_url"
+    # Step 1: Clone from GitLab (or update existing)
+    if [[ -d "${temp_dir}" ]]; then
+        # Directory exists - check if it's a valid git repo
+        if [[ -d "${temp_dir}/.git" ]] || [[ -f "${temp_dir}/HEAD" ]]; then
+            print_info "Found existing clone, fetching latest..."
+            if [[ "$DRY_RUN" == false ]]; then
+                cd "${temp_dir}"
+                if git fetch --all >> "${LOG_FILE}" 2>&1; then
+                    print_success "Updated existing clone"
+                    log "INFO" "Fetched latest for existing clone: $slug"
+                else
+                    print_warning "Fetch failed, removing and re-cloning..."
+                    cd - > /dev/null
+                    rm -rf "${temp_dir}"
+                fi
+                cd - > /dev/null 2>&1 || true
+            else
+                print_info "[DRY-RUN] Would fetch latest for existing clone"
+            fi
         else
-            print_error "Failed to clone from GitLab"
-            log "ERROR" "Failed to clone from GitLab: $gitlab_url"
-            return 1
+            # Not a valid git repo, remove it
+            print_warning "Removing invalid directory..."
+            rm -rf "${temp_dir}"
+        fi
+    fi
+    
+    # Clone if directory doesn't exist (or was removed)
+    if [[ ! -d "${temp_dir}" ]]; then
+        print_info "Cloning from GitLab (mirror)..."
+        if [[ "$DRY_RUN" == true ]]; then
+            print_info "[DRY-RUN] Would run: git clone --mirror ${gitlab_url} ${temp_dir}"
+            log "INFO" "[DRY-RUN] Would clone: $gitlab_url"
+        else
+            if git clone --mirror "${gitlab_url}" "${temp_dir}" >> "${LOG_FILE}" 2>&1; then
+                print_success "Cloned from GitLab"
+                log "INFO" "Successfully cloned: $gitlab_url"
+            else
+                print_error "Failed to clone from GitLab"
+                log "ERROR" "Failed to clone from GitLab: $gitlab_url"
+                return 1
+            fi
         fi
     fi
     
@@ -470,44 +498,74 @@ migrate_repository() {
     
     # Step 3: Check if repository exists on GitHub
     print_info "Checking if repository exists on GitHub..."
+    local github_exists=false
     if [[ "$DRY_RUN" == false ]]; then
         if gh repo view "${GITHUB_USER}/${slug}" &> /dev/null; then
-            print_error "Repository already exists on GitHub: ${GITHUB_USER}/${slug}"
-            log "ERROR" "Repository already exists: ${GITHUB_USER}/${slug}"
-            rm -rf "${temp_dir}"
-            return 1
+            github_exists=true
+            print_warning "Repository already exists on GitHub: ${GITHUB_USER}/${slug}"
+            echo ""
+            echo "  1) Skip this repository"
+            echo "  2) Delete GitHub repo and re-migrate"
+            echo "  3) Push to existing repo (may fail if histories differ)"
+            echo ""
+            read -p "Select option [1/2/3]: " gh_choice
+            
+            case "$gh_choice" in
+                2)
+                    print_info "Deleting existing GitHub repository..."
+                    if gh repo delete "${GITHUB_USER}/${slug}" --yes >> "${LOG_FILE}" 2>&1; then
+                        print_success "Deleted ${GITHUB_USER}/${slug}"
+                        log "INFO" "Deleted existing repo: ${GITHUB_USER}/${slug}"
+                        github_exists=false
+                    else
+                        print_error "Failed to delete repository"
+                        log "ERROR" "Failed to delete: ${GITHUB_USER}/${slug}"
+                        return 1
+                    fi
+                    ;;
+                3)
+                    print_info "Will push to existing repository..."
+                    log "INFO" "User chose to push to existing repo: ${GITHUB_USER}/${slug}"
+                    ;;
+                *)
+                    print_info "Skipping ${slug}"
+                    log "INFO" "User skipped existing repo: ${GITHUB_USER}/${slug}"
+                    return 1
+                    ;;
+            esac
         fi
     else
         print_info "[DRY-RUN] Would check if ${GITHUB_USER}/${slug} exists"
     fi
     
-    # Step 4: Create repository on GitHub
-    print_info "Creating repository on GitHub..."
-    local gh_visibility="$visibility"
-    [[ "$visibility" == "internal" ]] && gh_visibility="private"
-    
-    local create_cmd="gh repo create ${GITHUB_USER}/${slug} --${gh_visibility}"
-    [[ -n "$description" ]] && create_cmd="$create_cmd --description=\"$description\""
-    
-    if [[ "$DRY_RUN" == true ]]; then
-        print_info "[DRY-RUN] Would run: $create_cmd --source=${temp_dir}"
-        log "INFO" "[DRY-RUN] Would create repo: ${GITHUB_USER}/${slug}"
-    else
-        # Create the repo without --source first, then push manually
-        if [[ -n "$description" ]]; then
-            gh repo create "${GITHUB_USER}/${slug}" "--${gh_visibility}" --description="$description" >> "${LOG_FILE}" 2>&1
-        else
-            gh repo create "${GITHUB_USER}/${slug}" "--${gh_visibility}" >> "${LOG_FILE}" 2>&1
-        fi
+    # Step 4: Create repository on GitHub (if it doesn't exist)
+    if [[ "$github_exists" == false ]]; then
+        print_info "Creating repository on GitHub..."
+        local gh_visibility="$visibility"
+        [[ "$visibility" == "internal" ]] && gh_visibility="private"
         
-        if [[ $? -eq 0 ]]; then
-            print_success "Created repository on GitHub"
-            log "INFO" "Successfully created: ${GITHUB_USER}/${slug}"
+        local create_cmd="gh repo create ${GITHUB_USER}/${slug} --${gh_visibility}"
+        [[ -n "$description" ]] && create_cmd="$create_cmd --description=\"$description\""
+        
+        if [[ "$DRY_RUN" == true ]]; then
+            print_info "[DRY-RUN] Would run: $create_cmd --source=${temp_dir}"
+            log "INFO" "[DRY-RUN] Would create repo: ${GITHUB_USER}/${slug}"
         else
-            print_error "Failed to create repository on GitHub"
-            log "ERROR" "Failed to create repo: ${GITHUB_USER}/${slug}"
-            rm -rf "${temp_dir}"
-            return 1
+            # Create the repo without --source first, then push manually
+            if [[ -n "$description" ]]; then
+                gh repo create "${GITHUB_USER}/${slug}" "--${gh_visibility}" --description="$description" >> "${LOG_FILE}" 2>&1
+            else
+                gh repo create "${GITHUB_USER}/${slug}" "--${gh_visibility}" >> "${LOG_FILE}" 2>&1
+            fi
+            
+            if [[ $? -eq 0 ]]; then
+                print_success "Created repository on GitHub"
+                log "INFO" "Successfully created: ${GITHUB_USER}/${slug}"
+            else
+                print_error "Failed to create repository on GitHub"
+                log "ERROR" "Failed to create repo: ${GITHUB_USER}/${slug}"
+                return 1
+            fi
         fi
     fi
     
