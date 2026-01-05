@@ -36,6 +36,7 @@ BOLD='\033[1m'
 # Default configuration
 DRY_RUN=false
 CUSTOM_CONFIG=""
+URL_UPDATE_MODE="none"  # none, per-repo, batch, skip
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -619,6 +620,9 @@ main() {
             exit 0
         fi
         echo ""
+        
+        # Ask about URL updates
+        prompt_url_update_mode
     fi
     
     # Migrate each repository
@@ -632,6 +636,11 @@ main() {
         if migrate_repository "$name" "$name" "$vis" "$url" "$desc" "$repo_num" "$TOTAL_REPOS"; then
             SUCCESS_REPOS+=("$name")
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            
+            # Per-repo URL update if user chose that option
+            if [[ "$URL_UPDATE_MODE" == "per-repo" ]] && [[ "$DRY_RUN" == false ]]; then
+                update_urls_single_repo "$name"
+            fi
         else
             FAILED_REPOS+=("$name")
             FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -667,9 +676,136 @@ main() {
     
     if [[ $FAILED_COUNT -gt 0 ]]; then
         exit 1
+    fi
+    
+    print_success "All repositories migrated successfully!"
+    
+    # Batch URL update if user chose that option
+    if [[ "$DRY_RUN" == false ]] && [[ $SUCCESS_COUNT -gt 0 ]]; then
+        if [[ "$URL_UPDATE_MODE" == "batch" ]]; then
+            run_batch_url_update
+        elif [[ "$URL_UPDATE_MODE" == "per-repo" ]]; then
+            # Already done per-repo, just inform user
+            echo ""
+            print_info "URL updates were applied per-repository during migration."
+            print_info "You do not need to run ./04-update-urls.sh separately."
+        elif [[ "$URL_UPDATE_MODE" == "skip" ]]; then
+            echo ""
+            print_info "URL updates were skipped."
+            print_info "Run ./04-update-urls.sh later if you want to update GitLab URLs."
+        fi
+    fi
+    
+    exit 0
+}
+
+#############################################################################
+# URL Update Functions
+#############################################################################
+
+prompt_url_update_mode() {
+    print_section "URL Update Options"
+    
+    echo -e "${CYAN}After migration, repositories may contain references to old GitLab URLs${NC}"
+    echo -e "${CYAN}in code, config files, documentation, and git submodules.${NC}"
+    echo ""
+    echo -e "${BOLD}When would you like to update these URLs?${NC}"
+    echo ""
+    echo "  1) Per repository - prompt after each repo is migrated"
+    echo "  2) All at once    - update all repos after migration completes"
+    echo "  3) Skip           - don't update URLs (can run ./04-update-urls.sh later)"
+    echo ""
+    read -p "Select option [1/2/3]: " choice
+    
+    case "$choice" in
+        1)
+            URL_UPDATE_MODE="per-repo"
+            print_info "Will prompt for URL updates after each repository"
+            log "INFO" "URL update mode: per-repo"
+            ;;
+        2)
+            URL_UPDATE_MODE="batch"
+            print_info "Will update all URLs after migration completes"
+            log "INFO" "URL update mode: batch"
+            ;;
+        3|*)
+            URL_UPDATE_MODE="skip"
+            print_info "URL updates will be skipped"
+            log "INFO" "URL update mode: skip"
+            ;;
+    esac
+    echo ""
+}
+
+update_urls_single_repo() {
+    local repo_name="$1"
+    local repo_dir="${WORK_DIR}/${repo_name}"
+    
+    echo ""
+    echo -e "${CYAN}Scanning $repo_name for GitLab URLs...${NC}"
+    
+    # Check if repo has any GitLab URLs
+    local url_count=$(grep -r "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" | wc -l || echo "0")
+    
+    if [[ $url_count -eq 0 ]]; then
+        print_success "No GitLab URLs found in $repo_name"
+        return 0
+    fi
+    
+    print_info "Found $url_count file(s) with GitLab URLs"
+    echo ""
+    echo -e "${YELLOW}Update URLs in $repo_name now?${NC}"
+    read -p "Continue? (yes/no): " response
+    
+    if [[ "$response" == "yes" ]]; then
+        # Run URL update for just this repo
+        cd "$repo_dir"
+        
+        # Find and update files
+        local files_updated=0
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            
+            # Perform replacements
+            sed -i "s|https://${GITLAB_HOST}/${GITLAB_USER}/|https://github.com/${GITHUB_USER}/|g" "$file"
+            sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|git@github.com:${GITHUB_USER}/|g" "$file"
+            sed -i "s|${GITLAB_HOST}/${GITLAB_USER}/|github.com/${GITHUB_USER}/|g" "$file"
+            ((files_updated++))
+        done < <(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/")
+        
+        if [[ $files_updated -gt 0 ]]; then
+            # Commit and push
+            git add -A
+            if git commit -m "chore: update repository URLs after migration to GitHub" &>/dev/null; then
+                if git push origin HEAD &>/dev/null; then
+                    print_success "Updated and pushed $files_updated file(s) in $repo_name"
+                    log "INFO" "URL update completed for $repo_name"
+                else
+                    print_error "Failed to push URL updates for $repo_name"
+                fi
+            fi
+        fi
+        
+        cd - > /dev/null
     else
-        print_success "All repositories migrated successfully!"
-        exit 0
+        print_info "Skipped URL update for $repo_name"
+    fi
+}
+
+run_batch_url_update() {
+    echo ""
+    print_section "Updating Repository URLs"
+    
+    print_info "Running URL update for all migrated repositories..."
+    echo ""
+    
+    # Call script 04 with --from-migrate flag to skip redundant prompts
+    if "${SCRIPT_DIR}/04-update-urls.sh" --from-migrate; then
+        log "INFO" "Batch URL update completed successfully"
+        echo ""
+        print_info "URL updates complete. You do not need to run ./04-update-urls.sh separately."
+    else
+        log "WARNING" "Batch URL update completed with some issues"
     fi
 }
 
@@ -723,7 +859,7 @@ EOF
 ## Next Steps
 
 1. **Verify Repositories**: Check each migrated repository on GitHub
-2. **Update Documentation**: Run \`./04-update-documentation.sh\` to update GitLab URLs
+2. **Update URLs**: Run \`./04-update-urls.sh\` to update GitLab URLs in code/docs
 3. **Update Local Repos**: Run \`./03-update-local-remotes.sh\` to update local remotes
 4. **Archive GitLab Repos**: Run \`./05-archive-gitlab-repos.sh\` to archive on GitLab
 5. **Cleanup**: Run \`./06-cleanup.sh\` to remove temporary files

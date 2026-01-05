@@ -1,20 +1,22 @@
 #!/bin/bash
 
 #############################################################################
-# Update Documentation URLs Script
+# Update Repository URLs Script
 # 
-# Purpose: Update GitLab URLs to GitHub URLs in documentation files
-# Scans: README, CHANGELOG, and all .md files in migrated repositories
+# Purpose: Update GitLab URLs to GitHub URLs in all repository files
+# Scans: All text files (code, config, documentation) for old URLs
 # Method: Interactive review before committing changes
 # Configuration: Uses config.ini for all settings
 #
 # Usage:
-#   ./update-documentation.sh [--dry-run] [--auto-commit] [--config FILE]
+#   ./04-update-urls.sh [--dry-run] [--auto-commit] [--config FILE]
 #
 # Options:
 #   --dry-run       Preview changes without modifying files
 #   --auto-commit   Automatically commit changes without review
 #   --config FILE   Use alternative config file
+#
+# Can be called from 02-migrate-repos.sh or run standalone
 #
 #############################################################################
 
@@ -39,6 +41,7 @@ BOLD='\033[1m'
 DRY_RUN=false
 AUTO_COMMIT=false
 CUSTOM_CONFIG=""
+CALLED_FROM_MIGRATE=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -55,6 +58,11 @@ while [[ $# -gt 0 ]]; do
             CUSTOM_CONFIG="$2"
             CONFIG_FILE="$2"
             shift 2
+            ;;
+        --from-migrate)
+            # Called from migration script - skip redundant prompts
+            CALLED_FROM_MIGRATE=true
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -89,10 +97,33 @@ TOTAL_FILES_UPDATED=0
 TOTAL_REPLACEMENTS=0
 declare -a UPDATED_REPOS=()
 
+# File extensions to scan (text files that might contain URLs)
+# Excludes binary files, images, compiled files, etc.
+TEXT_EXTENSIONS=(
+    "md" "txt" "rst" "adoc"                    # Documentation
+    "sh" "bash" "zsh" "fish"                   # Shell scripts
+    "py" "rb" "pl" "php"                       # Scripting languages
+    "js" "ts" "jsx" "tsx" "mjs" "cjs"          # JavaScript/TypeScript
+    "java" "kt" "scala" "groovy"               # JVM languages
+    "c" "cpp" "h" "hpp" "cc"                   # C/C++
+    "go" "rs" "swift"                          # Go, Rust, Swift
+    "cs" "fs" "vb"                             # .NET languages
+    "json" "yaml" "yml" "toml" "ini" "conf"   # Config files
+    "xml" "html" "htm" "css" "scss" "sass"    # Web files
+    "sql" "graphql"                            # Query languages
+    "Dockerfile" "docker-compose"              # Docker
+    "tf" "hcl"                                 # Terraform
+    "nix"                                      # Nix
+    "vim" "lua"                                # Editor configs
+    "gitignore" "gitattributes" "gitmodules"  # Git files
+    "env" "env.example" "env.sample"          # Environment files
+    "Makefile" "CMakeLists"                   # Build files
+)
+
 print_header() {
     echo -e "${BOLD}${CYAN}"
     echo "╔════════════════════════════════════════════════════════════════════╗"
-    echo "║     Update Documentation URLs                                      ║"
+    echo "║     Update Repository URLs                                         ║"
     echo "║     GitLab → GitHub URL Replacement                               ║"
     echo "╚════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -124,7 +155,7 @@ clone_repository() {
     
     # Check if already exists (from migration script 02)
     if [[ -d "$repo_dir/.git" ]]; then
-        print_info "Using existing clone from migration: $repo_name"
+        print_info "Using existing clone: $repo_name"
         # Make sure we're on the right branch
         cd "$repo_dir"
         git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
@@ -154,16 +185,31 @@ clone_repository() {
     fi
 }
 
-find_documentation_files() {
+find_text_files() {
     local repo_dir="$1"
     
-    # Find all markdown files
-    find "$repo_dir" -type f -name "*.md" 2>/dev/null | grep -v ".git" || true
+    # Build find command with all text extensions
+    local find_args=()
+    for ext in "${TEXT_EXTENSIONS[@]}"; do
+        if [[ ${#find_args[@]} -gt 0 ]]; then
+            find_args+=("-o")
+        fi
+        find_args+=("-name" "*.${ext}")
+    done
+    
+    # Also include files without extensions that might be scripts
+    find_args+=("-o" "-name" "Makefile")
+    find_args+=("-o" "-name" "Dockerfile")
+    find_args+=("-o" "-name" "Jenkinsfile")
+    find_args+=("-o" "-name" "Vagrantfile")
+    find_args+=("-o" "-name" ".gitmodules")
+    
+    # Find files, excluding .git directory
+    find "$repo_dir" -type f \( "${find_args[@]}" \) 2>/dev/null | grep -v "/.git/" || true
 }
 
 update_urls_in_file() {
     local file="$1"
-    local repo_name="$2"
     
     # Patterns to replace
     local gitlab_https="https://${GITLAB_HOST}/${GITLAB_USER}"
@@ -171,13 +217,22 @@ update_urls_in_file() {
     local github_https="https://github.com/${GITHUB_USER}"
     local github_ssh="git@github.com:${GITHUB_USER}"
     
+    # Also handle bare host references (without protocol)
+    local gitlab_bare="${GITLAB_HOST}/${GITLAB_USER}"
+    local github_bare="github.com/${GITHUB_USER}"
+    
     # Count matches first
-    local https_count=$(grep -c "${GITLAB_HOST}/${GITLAB_USER}" "$file" 2>/dev/null || true)
-    local ssh_count=$(grep -c "${GITLAB_HOST}:${GITLAB_USER}" "$file" 2>/dev/null || true)
-    local total_matches=$((${https_count:-0} + ${ssh_count:-0}))
+    local https_count=$(grep -c "https://${GITLAB_HOST}/${GITLAB_USER}" "$file" 2>/dev/null || true)
+    local ssh_count=$(grep -c "git@${GITLAB_HOST}:${GITLAB_USER}" "$file" 2>/dev/null || true)
+    local bare_count=$(grep -c "${GITLAB_HOST}/${GITLAB_USER}" "$file" 2>/dev/null || true)
+    
+    # bare_count includes https matches, so subtract
+    bare_count=$((${bare_count:-0} - ${https_count:-0}))
+    [[ $bare_count -lt 0 ]] && bare_count=0
+    
+    local total_matches=$((${https_count:-0} + ${ssh_count:-0} + ${bare_count:-0}))
     
     if [[ "$DRY_RUN" == true ]]; then
-        # Just report count, don't modify
         echo "$total_matches"
         return 0
     fi
@@ -190,11 +245,15 @@ update_urls_in_file() {
     # Perform replacements
     local temp_file="${file}.tmp"
     
-    # Replace HTTPS URLs
+    # Replace HTTPS URLs first
     sed "s|https://${GITLAB_HOST}/${GITLAB_USER}/|${github_https}/|g" "$file" > "$temp_file"
     
     # Replace SSH URLs
     sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|${github_ssh}/|g" "$temp_file"
+    
+    # Replace bare host references (careful not to double-replace)
+    # Only replace if not already github.com
+    sed -i "s|${GITLAB_HOST}/${GITLAB_USER}/|${github_bare}/|g" "$temp_file"
     
     # Check if anything changed
     if ! diff -q "$file" "$temp_file" &>/dev/null; then
@@ -222,42 +281,45 @@ process_repository() {
     
     cd "$repo_dir"
     
-    # Find documentation files
-    print_info "Scanning for documentation files..."
-    local doc_files=$(find_documentation_files "$repo_dir")
+    # Find text files
+    print_info "Scanning for files containing GitLab URLs..."
+    local text_files=$(find_text_files "$repo_dir")
     
-    if [[ -z "$doc_files" ]]; then
-        print_info "No documentation files found"
+    if [[ -z "$text_files" ]]; then
+        print_info "No text files found"
         return 0
     fi
     
-    local file_count=$(echo "$doc_files" | wc -l)
-    print_info "Found $file_count documentation file(s)"
-    echo ""
-    
     # Check each file for GitLab URLs
     local files_with_urls=()
-    local files_need_update=()
     
-    for file in $doc_files; do
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
         if grep -q "${GITLAB_HOST}" "$file" 2>/dev/null; then
-            local rel_path="${file#$repo_dir/}"
             files_with_urls+=("$file")
-            print_info "Found GitLab URLs in: $rel_path"
-            
-            # Show preview of lines with URLs
-            if [[ "$DRY_RUN" == true ]] || [[ "$AUTO_COMMIT" == false ]]; then
-                echo -e "${YELLOW}Preview:${NC}"
-                grep -n "${GITLAB_HOST}" "$file" | head -5 | sed 's/^/  /'
-                echo ""
-            fi
         fi
-    done
+    done <<< "$text_files"
     
     if [[ ${#files_with_urls[@]} -eq 0 ]]; then
         print_success "No GitLab URLs found - repository is clean"
         return 0
     fi
+    
+    print_info "Found ${#files_with_urls[@]} file(s) with GitLab URLs"
+    echo ""
+    
+    # Show files with URLs
+    for file in "${files_with_urls[@]}"; do
+        local rel_path="${file#$repo_dir/}"
+        print_info "Found GitLab URLs in: $rel_path"
+        
+        # Show preview of lines with URLs
+        if [[ "$DRY_RUN" == true ]] || [[ "$AUTO_COMMIT" == false ]]; then
+            echo -e "${YELLOW}Preview:${NC}"
+            grep -n "${GITLAB_HOST}" "$file" 2>/dev/null | head -5 | sed 's/^/  /'
+            echo ""
+        fi
+    done
     
     # Ask for confirmation unless auto-commit or dry-run
     if [[ "$DRY_RUN" == false ]] && [[ "$AUTO_COMMIT" == false ]]; then
@@ -272,25 +334,18 @@ process_repository() {
     
     # Update files
     local repo_changes=0
+    local files_updated=0
+    
     for file in "${files_with_urls[@]}"; do
         local rel_path="${file#$repo_dir/}"
         
-        if [[ "$DRY_RUN" == false ]]; then
-            # Backup original
-            cp "$file" "$file.orig"
-        fi
-        
-        local changes=$(update_urls_in_file "$file" "$repo_name")
+        local changes=$(update_urls_in_file "$file")
         
         if [[ $changes -gt 0 ]]; then
             print_success "Updated: $rel_path ($changes replacement(s))"
             ((repo_changes += changes))
-            ((TOTAL_FILES_UPDATED++))
-            files_need_update+=("$file")
+            ((files_updated++))
         fi
-        
-        # Clean up backup
-        rm -f "$file.orig"
     done
     
     if [[ $repo_changes -eq 0 ]]; then
@@ -298,6 +353,7 @@ process_repository() {
         return 0
     fi
     
+    ((TOTAL_FILES_UPDATED += files_updated))
     ((TOTAL_REPLACEMENTS += repo_changes))
     
     # Show diff if not auto-committing
@@ -310,23 +366,25 @@ process_repository() {
         echo -e "${YELLOW}Commit these changes?${NC}"
         read -p "Commit? (yes/no): " commit_response
         if [[ "$commit_response" != "yes" ]]; then
-            print_warning "Changes not committed (staged for review)"
+            print_warning "Changes not committed (review with: git diff)"
             return 0
         fi
     fi
     
     # Commit changes
     if [[ "$DRY_RUN" == false ]]; then
-        git add *.md **/*.md 2>/dev/null || true
+        git add -A
         
-        if git commit -m "docs: update repository URLs after migration to GitHub" &>/dev/null; then
+        if git commit -m "chore: update repository URLs after migration to GitHub
+
+Replaced GitLab URLs with GitHub URLs across the codebase." &>/dev/null; then
             print_success "Changes committed"
             
             # Push changes
-            echo -e "${YELLOW}Push changes to GitHub?${NC}"
             if [[ "$AUTO_COMMIT" == true ]]; then
                 push_response="yes"
             else
+                echo -e "${YELLOW}Push changes to GitHub?${NC}"
                 read -p "Push? (yes/no): " push_response
             fi
             
@@ -373,12 +431,14 @@ main() {
     
     print_section "Repositories to Process"
     for repo in "${REPOS[@]}"; do
-        echo "  • $repo"
+        echo "  - $repo"
     done
     echo ""
     
-    if [[ "$DRY_RUN" == false ]] && [[ "$AUTO_COMMIT" == false ]]; then
-        echo -e "${YELLOW}This will scan and update documentation files in all repositories.${NC}"
+    # Skip confirmation if called from migrate script or auto-commit
+    if [[ "$DRY_RUN" == false ]] && [[ "$AUTO_COMMIT" == false ]] && [[ "$CALLED_FROM_MIGRATE" == false ]]; then
+        echo -e "${YELLOW}This will scan all text files for GitLab URLs and update them.${NC}"
+        echo -e "${YELLOW}File types: code, config, documentation, scripts, etc.${NC}"
         echo -e "${YELLOW}You will be prompted to review changes before committing.${NC}"
         echo ""
         read -p "Continue? (yes/no): " confirmation
@@ -398,7 +458,7 @@ main() {
     print_section "Summary"
     echo -e "${BOLD}Total repositories processed:${NC} ${#REPOS[@]}"
     echo -e "${BOLD}Files updated:${NC} $TOTAL_FILES_UPDATED"
-    echo -e "${BOLD}Total replacements:${NC} $TOTAL_REPLACEMENTS"
+    echo -e "${BOLD}Total URL replacements:${NC} $TOTAL_REPLACEMENTS"
     echo -e "${BOLD}Repositories committed & pushed:${NC} ${#UPDATED_REPOS[@]}"
     echo ""
     
@@ -415,7 +475,7 @@ main() {
         print_info "Run ./06-cleanup.sh when done to remove temporary files"
     fi
     
-    print_success "Documentation update process complete!"
+    print_success "URL update process complete!"
 }
 
 main "$@"
