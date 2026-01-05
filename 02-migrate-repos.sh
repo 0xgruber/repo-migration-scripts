@@ -242,6 +242,184 @@ preflight_checks() {
 }
 
 #############################################################################
+# Local Repository Check
+#############################################################################
+
+check_local_repos() {
+    print_section "Checking Local Repositories"
+    
+    # Load local repositories from config
+    local local_repos_raw
+    mapfile -t local_repos_raw < <(load_local_repositories)
+    
+    if [[ ${#local_repos_raw[@]} -eq 0 ]]; then
+        print_info "No local repositories configured - skipping local repo check"
+        return 0
+    fi
+    
+    print_info "Checking ${#local_repos_raw[@]} local repositories for uncommitted/unpushed changes..."
+    echo ""
+    
+    local repos_with_issues=()
+    local repos_uncommitted=()
+    local repos_unpushed=()
+    
+    for repo_entry in "${local_repos_raw[@]}"; do
+        # Format: name|path
+        IFS='|' read -r repo_name repo_path <<< "$repo_entry"
+        
+        # Skip if directory doesn't exist
+        if [[ ! -d "$repo_path" ]]; then
+            print_warning "Directory not found: $repo_path (skipping)"
+            continue
+        fi
+        
+        # Skip if not a git repository
+        if [[ ! -d "$repo_path/.git" ]]; then
+            print_warning "Not a git repository: $repo_path (skipping)"
+            continue
+        fi
+        
+        local has_issues=false
+        local uncommitted=false
+        local unpushed=false
+        
+        # Check for uncommitted changes
+        if [[ -n "$(git -C "$repo_path" status --porcelain 2>/dev/null)" ]]; then
+            uncommitted=true
+            has_issues=true
+            repos_uncommitted+=("$repo_name|$repo_path")
+        fi
+        
+        # Check for unpushed commits
+        local unpushed_count=$(git -C "$repo_path" rev-list @{u}..HEAD --count 2>/dev/null || echo "0")
+        if [[ "$unpushed_count" -gt 0 ]]; then
+            unpushed=true
+            has_issues=true
+            repos_unpushed+=("$repo_name|$repo_path|$unpushed_count")
+        fi
+        
+        if [[ "$has_issues" == true ]]; then
+            repos_with_issues+=("$repo_name|$repo_path")
+            print_error "$repo_name ($repo_path)"
+            [[ "$uncommitted" == true ]] && echo -e "    ${YELLOW}└─ Has uncommitted changes${NC}"
+            [[ "$unpushed" == true ]] && echo -e "    ${YELLOW}└─ Has $unpushed_count unpushed commit(s)${NC}"
+        else
+            print_success "$repo_name - clean"
+        fi
+    done
+    
+    echo ""
+    
+    # If there are issues, prompt user
+    if [[ ${#repos_with_issues[@]} -gt 0 ]]; then
+        print_warning "Found ${#repos_with_issues[@]} repository(ies) with uncommitted or unpushed changes"
+        echo ""
+        echo -e "${YELLOW}These changes will NOT be included in the migration unless pushed to GitLab first.${NC}"
+        echo ""
+        
+        if [[ "$DRY_RUN" == true ]]; then
+            print_info "[DRY-RUN] Would prompt to commit and push changes"
+            return 0
+        fi
+        
+        echo -e "${CYAN}Options:${NC}"
+        echo "  1) Commit and push all changes to GitLab now"
+        echo "  2) Continue migration without these changes (not recommended)"
+        echo "  3) Abort migration and handle manually"
+        echo ""
+        read -p "Select option [1/2/3]: " choice
+        
+        case "$choice" in
+            1)
+                commit_and_push_local_repos "${repos_with_issues[@]}"
+                ;;
+            2)
+                print_warning "Continuing without local changes - these will NOT be migrated!"
+                log "WARNING" "User chose to continue without pushing local changes"
+                echo ""
+                ;;
+            3|*)
+                print_info "Migration aborted. Please commit and push your changes manually:"
+                echo ""
+                for repo_entry in "${repos_with_issues[@]}"; do
+                    IFS='|' read -r name path <<< "$repo_entry"
+                    echo "  cd $path"
+                    echo "  git add -A && git commit -m 'Pre-migration commit' && git push"
+                    echo ""
+                done
+                exit 0
+                ;;
+        esac
+    else
+        print_success "All local repositories are clean - ready for migration!"
+    fi
+    
+    echo ""
+}
+
+commit_and_push_local_repos() {
+    local repos=("$@")
+    
+    print_section "Committing and Pushing Local Changes"
+    
+    for repo_entry in "${repos[@]}"; do
+        IFS='|' read -r repo_name repo_path <<< "$repo_entry"
+        
+        print_info "Processing: $repo_name"
+        
+        cd "$repo_path"
+        
+        # Check for uncommitted changes
+        if [[ -n "$(git status --porcelain)" ]]; then
+            print_info "  Staging changes..."
+            git add -A
+            
+            # Prompt for commit message
+            echo ""
+            echo -e "${CYAN}Enter commit message for $repo_name${NC}"
+            echo -e "${YELLOW}(or press Enter for default: 'Pre-migration commit')${NC}"
+            read -p "> " commit_msg
+            
+            if [[ -z "$commit_msg" ]]; then
+                commit_msg="Pre-migration commit"
+            fi
+            
+            if git commit -m "$commit_msg"; then
+                print_success "  Committed changes"
+                log "INFO" "Committed changes in $repo_name: $commit_msg"
+            else
+                print_error "  Failed to commit changes"
+                log "ERROR" "Failed to commit in $repo_name"
+                continue
+            fi
+        fi
+        
+        # Push to origin (GitLab)
+        print_info "  Pushing to GitLab..."
+        if git push origin 2>/dev/null; then
+            print_success "  Pushed to GitLab"
+            log "INFO" "Pushed $repo_name to GitLab"
+        else
+            # Try pushing with upstream set
+            local current_branch=$(git branch --show-current)
+            if git push -u origin "$current_branch" 2>/dev/null; then
+                print_success "  Pushed to GitLab (set upstream)"
+                log "INFO" "Pushed $repo_name to GitLab with upstream"
+            else
+                print_error "  Failed to push to GitLab"
+                log "ERROR" "Failed to push $repo_name to GitLab"
+            fi
+        fi
+        
+        echo ""
+    done
+    
+    print_success "Finished processing local repositories"
+    echo ""
+}
+
+#############################################################################
 # Repository Migration Functions
 #############################################################################
 
@@ -403,6 +581,9 @@ main() {
     
     # Run pre-flight checks
     preflight_checks
+    
+    # Check local repositories for uncommitted/unpushed changes
+    check_local_repos
     
     # Display migration plan
     print_section "Migration Plan"
