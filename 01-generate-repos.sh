@@ -281,16 +281,17 @@ echo ""
 
 # Show summary
 echo -e "${CYAN}Summary:${NC}"
-TOTAL=$(grep -c '^[^#\[]' "${OUTPUT_FILE}" 2>/dev/null || echo "0")
-PUBLIC=$(grep '|public|' "${OUTPUT_FILE}" | wc -l || echo "0")
-PRIVATE=$(grep '|private|' "${OUTPUT_FILE}" | wc -l || echo "0")
-INTERNAL=$(grep '|internal|' "${OUTPUT_FILE}" | wc -l || echo "0")
-EXCLUDED=$((TOTAL_REPOS - TOTAL))
+SELECTED=$(grep -c '^[^#\[]' "${OUTPUT_FILE}" 2>/dev/null || echo "0")
+PUBLIC=$(grep '^[^#].*|public|' "${OUTPUT_FILE}" | wc -l || echo "0")
+PRIVATE=$(grep '^[^#].*|private|' "${OUTPUT_FILE}" | wc -l || echo "0")
+INTERNAL=$(grep '^[^#].*|internal|' "${OUTPUT_FILE}" | wc -l || echo "0")
+EXCLUDED=$((TOTAL_REPOS - SELECTED))
 
-echo "  Total repositories: ${TOTAL}"
+echo "  Total repositories: ${TOTAL_REPOS}"
+echo "  Selected: ${SELECTED}"
 echo "  Public: ${PUBLIC}"
 echo "  Private: ${PRIVATE}"
-echo "  Internal: ${INTERNAL}"
+[[ $INTERNAL -gt 0 ]] && echo "  Internal: ${INTERNAL}"
 [[ $EXCLUDED -gt 0 ]] && echo -e "  ${DIM}Excluded: ${EXCLUDED}${NC}"
 echo ""
 
