@@ -812,13 +812,13 @@ update_urls_single_repo() {
     echo ""
     echo -e "${CYAN}Scanning $repo_name for GitLab URLs...${NC}"
     
-    # Check if repo has any GitLab URLs
+    # Check if repo has any GitLab URLs (use || true to prevent set -e exit)
     local url_count
-    url_count=$(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" | wc -l)
+    url_count=$(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" | wc -l || true)
     url_count="${url_count//[[:space:]]/}"  # Remove whitespace
     url_count="${url_count:-0}"  # Default to 0 if empty
     
-    if [[ "$url_count" -eq 0 ]]; then
+    if [[ "$url_count" -eq 0 ]] || [[ -z "$url_count" ]]; then
         print_success "No GitLab URLs found in $repo_name"
         return 0
     fi
@@ -834,15 +834,20 @@ update_urls_single_repo() {
         
         # Find and update files
         local files_updated=0
-        while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            
-            # Perform replacements
-            sed -i "s|https://${GITLAB_HOST}/${GITLAB_USER}/|https://github.com/${GITHUB_USER}/|g" "$file"
-            sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|git@github.com:${GITHUB_USER}/|g" "$file"
-            sed -i "s|${GITLAB_HOST}/${GITLAB_USER}/|github.com/${GITHUB_USER}/|g" "$file"
-            ((files_updated++))
-        done < <(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/")
+        local file_list
+        file_list=$(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" || true)
+        
+        if [[ -n "$file_list" ]]; then
+            while IFS= read -r file; do
+                [[ -z "$file" ]] && continue
+                
+                # Perform replacements
+                sed -i "s|https://${GITLAB_HOST}/${GITLAB_USER}/|https://github.com/${GITHUB_USER}/|g" "$file"
+                sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|git@github.com:${GITHUB_USER}/|g" "$file"
+                sed -i "s|${GITLAB_HOST}/${GITLAB_USER}/|github.com/${GITHUB_USER}/|g" "$file"
+                ((files_updated++)) || true
+            done <<< "$file_list"
+        fi
         
         if [[ $files_updated -gt 0 ]]; then
             # Commit and push
