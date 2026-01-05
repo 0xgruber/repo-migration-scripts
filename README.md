@@ -174,22 +174,39 @@ Each script prompts to run the next step when complete.
 
 ### Security Workflow
 
-This toolkit includes a standard GitHub Actions security workflow that should be deployed to **all repositories** (current and future).
+Standard GitHub Actions security workflows are maintained in a separate repository:
+
+**Repository:** [github-templates](https://github.com/0xgruber/github-templates)
 
 **Features:**
-- 🔒 **Secret scanning** with Gitleaks (full git history)
+- 🔒 **Secret scanning** with Gitleaks (full git history) - Essential for private repos!
 - 🐚 **Shell script linting** with ShellCheck
 - 📦 **Dependency review** for pull requests
 - ⏰ **Weekly scheduled scans**
+- 🤖 **Dependabot** enabled on all repos
 
 **Deploy to all repositories:**
 ```bash
+# Ensure github-templates is cloned
+git clone https://github.com/0xgruber/github-templates.git /path/to/github-templates
+
+# Deploy security workflow to all repos
 ./07-deploy-security-workflow.sh
 ```
 
-**For new repositories:** Copy `templates/security-workflow.yml` to `.github/workflows/security.yml`
+**For new repositories:** 
+```bash
+# Copy from github-templates repo
+cp github-templates/workflows/security.yml <your-repo>/.github/workflows/
+```
 
-**Documentation:** See [SECURITY-WORKFLOW.md](SECURITY-WORKFLOW.md) for full details.
+**Why use custom workflows?**
+- GitHub's native secret scanning requires paid Advanced Security for private repos
+- Our Gitleaks workflow provides secret scanning for FREE on private repos
+- ShellCheck is not included in GitHub's native features
+- Supplements Dependabot (which is enabled on all repos)
+
+**Documentation:** See [github-templates/README.md](https://github.com/0xgruber/github-templates)
 
 ---
 

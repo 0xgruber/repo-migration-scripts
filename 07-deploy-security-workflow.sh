@@ -52,8 +52,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Template file
-TEMPLATE_FILE="${SCRIPT_DIR}/templates/security-workflow.yml"
+# Template file location
+# NOTE: Templates have been moved to github-templates repository
+# Download from: https://github.com/0xgruber/github-templates
+GITHUB_TEMPLATES_REPO="${LOCAL_REPO_ROOT}/github-templates"
+TEMPLATE_FILE="${GITHUB_TEMPLATES_REPO}/workflows/security.yml"
 
 # Statistics
 TOTAL_REPOS=0
@@ -90,6 +93,21 @@ print_info() {
 }
 
 check_template() {
+    # Check if github-templates repo exists
+    if [[ ! -d "$GITHUB_TEMPLATES_REPO" ]]; then
+        print_error "github-templates repository not found: $GITHUB_TEMPLATES_REPO"
+        print_info "Cloning from GitHub..."
+        if git clone "git@github.com:${GITHUB_USER}/github-templates.git" "$GITHUB_TEMPLATES_REPO" &>/dev/null; then
+            print_success "Cloned github-templates repository"
+        else
+            print_error "Failed to clone github-templates"
+            echo ""
+            echo "Please clone it manually:"
+            echo "  git clone git@github.com:${GITHUB_USER}/github-templates.git $GITHUB_TEMPLATES_REPO"
+            exit 1
+        fi
+    fi
+    
     if [[ ! -f "$TEMPLATE_FILE" ]]; then
         print_error "Template file not found: $TEMPLATE_FILE"
         exit 1
