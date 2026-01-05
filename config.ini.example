@@ -1,0 +1,56 @@
+# Repository Migration Configuration
+# Copy this file to config.ini and edit with your settings
+#
+# cp config.ini.example config.ini
+# nano config.ini
+
+[source]
+# Source GitLab configuration
+# For gitlab.com use: gitlab.com
+# For self-hosted use your domain: gitlab.example.com
+host = gitlab.com
+user = your-gitlab-username
+# GitLab Personal Access Token (with API read access)
+# Create at: https://gitlab.com/-/user_settings/personal_access_tokens
+# Required scopes: read_api, read_repository
+api_token = glpat-xxxxxxxxxxxxxxxxxxxx
+
+[destination]
+# Destination GitHub configuration
+host = github.com
+user = your-github-username
+# Note: GitHub CLI (gh) is used for authentication
+# Run: gh auth login
+
+[paths]
+# Working directory for temporary files during migration
+work_dir = /tmp/repo-migration
+# Directory for documentation update temporary clones
+doc_update_dir = /tmp/doc-update
+# Root directory for local repository clones
+# Repos will be looked up as: local_repo_root/repo-name
+local_repo_root = /home/user/code
+
+[local_repos]
+# Local repositories to update after migration
+# Just the repo name - full path is derived from local_repo_root
+# For repos in non-standard locations, use: name|/custom/path
+#
+# Example:
+# repos = my-project
+#     another-repo
+#     dotfiles|/home/user/.dotfiles
+#     notes|/home/user/Documents/notes
+repos = 
+
+[options]
+# Migration options
+
+# Minimum disk space required in MB (default: 5120 = 5GB)
+min_disk_space_mb = 5120
+
+# SSH connection timeout in seconds
+ssh_timeout = 5
+
+# Enable verbose logging (true/false)
+verbose = true

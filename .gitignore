@@ -1,0 +1,27 @@
+# User configuration (contains credentials and personal settings)
+config.ini
+repos.ini
+
+# Backup files
+*.backup
+*.bak
+*.orig
+*.tmp
+*~
+
+# Logs
+*.log
+migration.log
+
+# Generated reports
+MIGRATION-REPORT.md
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
