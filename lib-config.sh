@@ -105,7 +105,6 @@ load_config() {
     
     # Paths
     WORK_DIR=$(config_get "paths" "work_dir")
-    DOC_UPDATE_DIR=$(config_get "paths" "doc_update_dir")
     LOCAL_REPO_ROOT=$(config_get "paths" "local_repo_root")
     
     # Options
@@ -120,7 +119,7 @@ load_config() {
     # Export for use in scripts
     export GITLAB_HOST GITLAB_USER GITLAB_TOKEN
     export GITHUB_HOST GITHUB_USER
-    export WORK_DIR DOC_UPDATE_DIR LOCAL_REPO_ROOT LOG_FILE REPORT_FILE
+    export WORK_DIR LOCAL_REPO_ROOT LOG_FILE REPORT_FILE
     export MIN_DISK_SPACE_MB SSH_TIMEOUT VERBOSE
 }
 

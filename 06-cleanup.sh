@@ -113,18 +113,6 @@ main() {
         echo ""
     fi
     
-    # Check doc_update_dir (if different from work_dir)
-    if [[ "${DOC_UPDATE_DIR}" != "${WORK_DIR}" ]] && [[ -d "${DOC_UPDATE_DIR}" ]]; then
-        local size=$(get_dir_size "${DOC_UPDATE_DIR}")
-        local count=$(($(count_repos "${DOC_UPDATE_DIR}") - 1))
-        dirs_to_clean+=("${DOC_UPDATE_DIR}")
-        echo -e "${BOLD}Documentation update directory:${NC}"
-        echo "  Path: ${DOC_UPDATE_DIR}"
-        echo "  Size: ${size}"
-        echo "  Repos: ${count}"
-        echo ""
-    fi
-    
     # Check for log files
     if [[ -f "${LOG_FILE}" ]] || [[ -f "${REPORT_FILE}" ]]; then
         echo -e "${BOLD}Log files:${NC}"

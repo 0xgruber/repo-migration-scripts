@@ -25,8 +25,6 @@ user = your-github-username
 [paths]
 # Working directory for temporary files during migration
 work_dir = /tmp/repo-migration
-# Directory for documentation update temporary clones
-doc_update_dir = /tmp/doc-update
 # Root directory for local repository clones
 # Repos will be looked up as: local_repo_root/repo-name
 local_repo_root = /home/user/code

@@ -83,15 +83,8 @@ for repo in "${REPOS_RAW[@]}"; do
     REPOS+=("$name")
 done
 
-# Use same WORK_DIR as migration script to reuse cloned repos
-# Falls back to DOC_UPDATE_DIR if specified, otherwise uses WORK_DIR
-if [[ -d "${WORK_DIR}" ]] && [[ "$(ls -A ${WORK_DIR} 2>/dev/null)" ]]; then
-    # Repos exist from migration, use them
-    CLONE_DIR="${WORK_DIR}"
-else
-    # No migration repos, use doc update dir
-    CLONE_DIR="${DOC_UPDATE_DIR:-${WORK_DIR}}"
-fi
+# Use WORK_DIR from config (same as migration script)
+CLONE_DIR="${WORK_DIR}"
 
 TOTAL_FILES_UPDATED=0
 TOTAL_REPLACEMENTS=0
