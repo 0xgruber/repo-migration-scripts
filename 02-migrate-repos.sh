@@ -608,18 +608,43 @@ migrate_repository() {
     # Step 7: Convert mirror clone to regular working copy (for use by other scripts)
     if [[ "$DRY_RUN" == false ]]; then
         print_info "Converting mirror to working copy..."
-        cd "${temp_dir}"
         
-        # Mirror clones are bare repos - convert to regular working copy
-        git config --bool core.bare false
-        git checkout HEAD -- . 2>/dev/null || true
+        # Mirror clones are bare repos - need proper conversion to working copy
+        # The best approach is to re-clone as a regular repo from the mirror
+        local working_dir="${temp_dir}-work"
         
-        # Update origin to point to GitHub
-        git remote set-url origin "${github_url}"
-        
-        cd - > /dev/null
-        print_success "Working copy ready at: ${temp_dir}"
-        log "INFO" "Converted to working copy: ${temp_dir}"
+        # Clone from local mirror to working copy
+        if git clone "${temp_dir}" "${working_dir}" >> "${LOG_FILE}" 2>&1; then
+            # Remove the bare mirror
+            rm -rf "${temp_dir}"
+            # Rename working copy to expected location
+            mv "${working_dir}" "${temp_dir}"
+            
+            cd "${temp_dir}"
+            
+            # Update origin to point to GitHub (not the local mirror)
+            git remote set-url origin "${github_url}"
+            
+            # Fetch all branches from GitHub to ensure we're in sync
+            git fetch origin >> "${LOG_FILE}" 2>&1 || true
+            
+            cd - > /dev/null
+            print_success "Working copy ready at: ${temp_dir}"
+            log "INFO" "Converted mirror to working copy: ${temp_dir}"
+        else
+            print_warning "Could not convert mirror to working copy - URL updates may fail"
+            log "WARNING" "Failed to convert mirror to working copy: ${temp_dir}"
+            
+            # Fallback: try the old method
+            cd "${temp_dir}"
+            git config --bool core.bare false
+            git checkout HEAD -- . 2>/dev/null || {
+                print_warning "Fallback checkout also failed"
+                log "WARNING" "Fallback git checkout failed for: ${temp_dir}"
+            }
+            git remote set-url origin "${github_url}" 2>/dev/null || true
+            cd - > /dev/null
+        fi
     else
         print_info "[DRY-RUN] Would keep working copy at: ${temp_dir}"
     fi
@@ -812,9 +837,38 @@ update_urls_single_repo() {
     echo ""
     echo -e "${CYAN}Scanning $repo_name for GitLab URLs...${NC}"
     
+    # Verify the working copy is properly set up
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        print_warning "Repository $repo_name is not a valid working copy - skipping URL update"
+        log "WARNING" "Skipping URL update for $repo_name - not a valid working copy"
+        return 0
+    fi
+    
+    # Check if there are actual files to scan (not just .git directory)
+    local file_count
+    file_count=$(find "$repo_dir" -maxdepth 1 -type f 2>/dev/null | wc -l || true)
+    if [[ "${file_count:-0}" -eq 0 ]]; then
+        # Try to checkout files if working tree is empty
+        print_info "Working tree appears empty, attempting checkout..."
+        cd "$repo_dir"
+        git checkout HEAD -- . 2>/dev/null || git checkout main -- . 2>/dev/null || git checkout master -- . 2>/dev/null || true
+        cd - > /dev/null
+    fi
+    
+    # Extended list of file extensions to scan
+    local include_patterns="--include=*.md --include=*.txt --include=*.rst"
+    include_patterns+=" --include=*.sh --include=*.bash --include=*.zsh"
+    include_patterns+=" --include=*.py --include=*.rb --include=*.pl"
+    include_patterns+=" --include=*.js --include=*.ts --include=*.jsx --include=*.tsx"
+    include_patterns+=" --include=*.yml --include=*.yaml --include=*.json --include=*.toml --include=*.ini --include=*.conf"
+    include_patterns+=" --include=*.xml --include=*.html"
+    include_patterns+=" --include=*.nix --include=*.tf --include=*.hcl"
+    include_patterns+=" --include=Makefile --include=Dockerfile --include=*.env"
+    include_patterns+=" --include=.gitmodules --include=*.gitconfig"
+    
     # Check if repo has any GitLab URLs (use || true to prevent set -e exit)
     local url_count
-    url_count=$(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" | wc -l || true)
+    url_count=$(grep -rl "${GITLAB_HOST}" "$repo_dir" $include_patterns 2>/dev/null | grep -v "/.git/" | wc -l || true)
     url_count="${url_count//[[:space:]]/}"  # Remove whitespace
     url_count="${url_count:-0}"  # Default to 0 if empty
     
@@ -824,7 +878,14 @@ update_urls_single_repo() {
     fi
     
     print_info "Found $url_count file(s) with GitLab URLs"
+    
+    # Show which files contain URLs for transparency
+    echo -e "${YELLOW}Files containing GitLab URLs:${NC}"
+    grep -rl "${GITLAB_HOST}" "$repo_dir" $include_patterns 2>/dev/null | grep -v "/.git/" | while read -r f; do
+        echo "  - ${f#$repo_dir/}"
+    done || true
     echo ""
+    
     echo -e "${YELLOW}Update URLs in $repo_name now?${NC}"
     read -p "Continue? (yes/no): " response
     
@@ -834,32 +895,67 @@ update_urls_single_repo() {
         
         # Find and update files
         local files_updated=0
+        local replacements_made=0
         local file_list
-        file_list=$(grep -rl "${GITLAB_HOST}" "$repo_dir" --include="*.md" --include="*.sh" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.toml" --include="*.ini" --include="*.conf" 2>/dev/null | grep -v "/.git/" || true)
+        file_list=$(grep -rl "${GITLAB_HOST}" "$repo_dir" $include_patterns 2>/dev/null | grep -v "/.git/" || true)
         
         if [[ -n "$file_list" ]]; then
             while IFS= read -r file; do
                 [[ -z "$file" ]] && continue
+                [[ ! -f "$file" ]] && continue
                 
-                # Perform replacements
+                # Count matches before replacement for logging
+                local before_count
+                before_count=$(grep -c "${GITLAB_HOST}" "$file" 2>/dev/null || true)
+                
+                # Perform replacements in order from most specific to least specific
+                # 1. Full HTTPS URLs
                 sed -i "s|https://${GITLAB_HOST}/${GITLAB_USER}/|https://github.com/${GITHUB_USER}/|g" "$file"
+                # 2. SSH URLs
                 sed -i "s|git@${GITLAB_HOST}:${GITLAB_USER}/|git@github.com:${GITHUB_USER}/|g" "$file"
+                # 3. Bare host references (for relative URLs, documentation, etc.)
                 sed -i "s|${GITLAB_HOST}/${GITLAB_USER}/|github.com/${GITHUB_USER}/|g" "$file"
-                ((files_updated++)) || true
+                # 4. HTTP URLs (non-HTTPS - less common but possible)
+                sed -i "s|http://${GITLAB_HOST}/${GITLAB_USER}/|https://github.com/${GITHUB_USER}/|g" "$file"
+                
+                # Count matches after replacement
+                local after_count
+                after_count=$(grep -c "${GITLAB_HOST}" "$file" 2>/dev/null || true)
+                
+                if [[ "${before_count:-0}" -gt "${after_count:-0}" ]]; then
+                    local file_replacements=$((${before_count:-0} - ${after_count:-0}))
+                    ((replacements_made += file_replacements)) || true
+                    ((files_updated++)) || true
+                    print_info "Updated: ${file#$repo_dir/} ($file_replacements replacement(s))"
+                fi
+                
+                # Warn if there are still GitLab URLs (might be different user or pattern)
+                if [[ "${after_count:-0}" -gt 0 ]]; then
+                    print_warning "File still has ${after_count} GitLab URL(s) - may be different user/pattern"
+                fi
             done <<< "$file_list"
         fi
         
         if [[ $files_updated -gt 0 ]]; then
+            print_success "Updated $files_updated file(s) with $replacements_made replacement(s)"
+            
             # Commit and push
             git add -A
-            if git commit -m "chore: update repository URLs after migration to GitHub" &>/dev/null; then
+            if git commit -m "chore: update repository URLs after migration to GitHub
+
+Replaced ${replacements_made} GitLab URL(s) with GitHub equivalents." &>/dev/null; then
                 if git push origin HEAD &>/dev/null; then
-                    print_success "Updated and pushed $files_updated file(s) in $repo_name"
-                    log "INFO" "URL update completed for $repo_name"
+                    print_success "Changes committed and pushed for $repo_name"
+                    log "INFO" "URL update completed for $repo_name: $files_updated files, $replacements_made replacements"
                 else
                     print_error "Failed to push URL updates for $repo_name"
+                    log "ERROR" "Failed to push URL updates for $repo_name"
                 fi
+            else
+                print_warning "Nothing to commit or commit failed"
             fi
+        else
+            print_info "No replacements were needed (URLs may not match expected patterns)"
         fi
         
         cd - > /dev/null
