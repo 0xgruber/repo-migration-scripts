@@ -466,6 +466,14 @@ main() {
     if [[ "$DRY_RUN" == false ]]; then
         print_info "Working directory: $CLONE_DIR"
         print_info "Run ./06-cleanup.sh when done to remove temporary files"
+        
+        # Prompt to run next script
+        echo ""
+        echo -e "${BLUE}Next step: ./05-archive-gitlab-repos.sh${NC}"
+        read -p "Archive migrated repositories on GitLab? [y/N]: " run_next
+        if [[ "${run_next,,}" == "y" ]]; then
+            exec "${SCRIPT_DIR}/05-archive-gitlab-repos.sh"
+        fi
     fi
     
     print_success "URL update process complete!"

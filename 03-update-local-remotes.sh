@@ -247,10 +247,18 @@ main() {
     if [[ $FAILED_COUNT -eq 0 ]]; then
         print_success "All repositories updated successfully!"
         echo ""
-        echo -e "${BOLD}Next steps:${NC}"
-        echo "  1. Test pulling/pushing from your local repos"
-        echo "  2. If everything works, you can remove gitlab-backup remotes:"
-        echo "     git remote remove gitlab-backup"
+        echo -e "${BOLD}Tips:${NC}"
+        echo "  • Test pulling/pushing from your local repos"
+        echo "  • If everything works, you can remove gitlab-backup remotes:"
+        echo "    git remote remove gitlab-backup"
+        
+        # Prompt to run next script
+        echo ""
+        echo -e "${BLUE}Next step: ./04-update-urls.sh${NC}"
+        read -p "Scan and update GitLab URLs in code/docs? [y/N]: " run_next
+        if [[ "${run_next,,}" == "y" ]]; then
+            exec "${SCRIPT_DIR}/04-update-urls.sh"
+        fi
     else
         print_error "Some repositories failed to update"
         exit 1

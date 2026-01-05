@@ -696,6 +696,16 @@ main() {
         fi
     fi
     
+    # Prompt to run next script
+    if [[ "$DRY_RUN" == false ]]; then
+        echo ""
+        echo -e "${BLUE}Next step: ./03-update-local-remotes.sh${NC}"
+        read -p "Update local repository remotes now? [y/N]: " run_next
+        if [[ "${run_next,,}" == "y" ]]; then
+            exec "${SCRIPT_DIR}/03-update-local-remotes.sh"
+        fi
+    fi
+    
     exit 0
 }
 

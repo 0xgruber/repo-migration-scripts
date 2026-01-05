@@ -75,10 +75,23 @@ NC='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
 
-# Cursor control
-CURSOR_UP='\033[A'
-CURSOR_DOWN='\033[B'
-CLEAR_LINE='\033[2K'
+# Whiptail dark theme
+export NEWT_COLORS='
+root=white,black
+window=white,black
+border=white,black
+shadow=white,black
+title=white,black
+button=black,gray
+actbutton=black,white
+checkbox=white,black
+actcheckbox=black,gray
+listbox=white,black
+actlistbox=black,gray
+textbox=white,black
+entry=white,black
+label=white,black
+'
 
 echo -e "${CYAN}Generating repos.ini from GitLab API${NC}"
 echo -e "GitLab Host: ${GITLAB_HOST}"
@@ -158,122 +171,43 @@ TOTAL_REPOS=${#REPO_NAMES[@]}
 # Interactive Selection Functions
 #############################################################################
 
-draw_checklist() {
-    local current_index=$1
-    local start_line=$2
-    
-    # Move cursor to start position
-    tput cup $start_line 0
-    
-    echo -e "${BOLD}Select repositories to migrate:${NC}"
-    echo -e "${DIM}Use arrow keys to navigate, SPACE to toggle, ENTER to confirm${NC}"
-    echo -e "${DIM}Selected repos will be migrated, unselected will be excluded${NC}"
-    echo ""
+run_interactive_selection() {
+    # Build whiptail checklist arguments
+    local -a checklist_args=()
     
     for i in "${!REPO_NAMES[@]}"; do
         local name="${REPO_NAMES[$i]}"
         local vis="${REPO_VISIBILITIES[$i]}"
-        local selected="${REPO_SELECTED[$i]}"
-        
-        # Highlight current line
-        if [[ $i -eq $current_index ]]; then
-            echo -ne "${BOLD}> "
-        else
-            echo -ne "  "
-        fi
-        
-        # Checkbox
-        if [[ $selected -eq 1 ]]; then
-            echo -ne "${GREEN}[x]${NC} "
-        else
-            echo -ne "${RED}[ ]${NC} "
-        fi
-        
-        # Repo name and visibility
-        if [[ $i -eq $current_index ]]; then
-            echo -e "${BOLD}${name}${NC} ${DIM}(${vis})${NC}${CLEAR_LINE}"
-        else
-            echo -e "${name} ${DIM}(${vis})${NC}${CLEAR_LINE}"
-        fi
+        # whiptail format: tag item status
+        checklist_args+=("$name" "($vis)" "ON")
     done
     
-    echo ""
-    local selected_count=0
-    for s in "${REPO_SELECTED[@]}"; do
-        ((selected_count += s))
-    done
-    echo -e "${CYAN}Selected: ${selected_count}/${TOTAL_REPOS} repositories${NC}${CLEAR_LINE}"
-    echo ""
-    echo -e "${YELLOW}[ENTER] Confirm selection    [a] Select all    [n] Select none    [q] Quit${NC}${CLEAR_LINE}"
-}
-
-run_interactive_selection() {
-    local current_index=0
+    # Calculate dimensions
+    local height=$((TOTAL_REPOS + 10))
+    [[ $height -gt 25 ]] && height=25
+    local width=60
+    local list_height=$((height - 8))
     
-    # Hide cursor
-    tput civis
+    # Run whiptail and capture selected repos
+    local selected
+    selected=$(whiptail --title "Select Repositories to Migrate" \
+        --checklist "Use SPACE to toggle, ENTER to confirm.\nSelected repos will be migrated:" \
+        $height $width $list_height \
+        "${checklist_args[@]}" \
+        3>&1 1>&2 2>&3) || {
+        echo -e "${YELLOW}Cancelled by user${NC}"
+        exit 0
+    }
     
-    # Save cursor position
-    local start_line=$(tput lines)
-    start_line=$((start_line - TOTAL_REPOS - 10))
-    [[ $start_line -lt 0 ]] && start_line=0
-    
-    # Clear screen area and draw initial list
-    tput cup $start_line 0
-    for ((i=0; i<TOTAL_REPOS+10; i++)); do
-        echo -e "${CLEAR_LINE}"
-    done
-    
-    draw_checklist $current_index $start_line
-    
-    # Read input
-    while true; do
-        # Read single keypress
-        IFS= read -rsn1 key
-        
-        case "$key" in
-            $'\x1b')  # Escape sequence (arrow keys)
-                read -rsn2 -t 0.1 key
-                case "$key" in
-                    '[A')  # Up arrow
-                        ((current_index > 0)) && ((current_index--))
-                        ;;
-                    '[B')  # Down arrow
-                        ((current_index < TOTAL_REPOS - 1)) && ((current_index++))
-                        ;;
-                esac
-                ;;
-            ' ')  # Space - toggle selection
-                if [[ ${REPO_SELECTED[$current_index]} -eq 1 ]]; then
-                    REPO_SELECTED[$current_index]=0
-                else
-                    REPO_SELECTED[$current_index]=1
-                fi
-                ;;
-            'a'|'A')  # Select all
-                for i in "${!REPO_SELECTED[@]}"; do
-                    REPO_SELECTED[$i]=1
-                done
-                ;;
-            'n'|'N')  # Select none
-                for i in "${!REPO_SELECTED[@]}"; do
-                    REPO_SELECTED[$i]=0
-                done
-                ;;
-            'q'|'Q')  # Quit
-                tput cnorm  # Show cursor
-                echo ""
-                echo -e "${YELLOW}Cancelled by user${NC}"
-                exit 0
-                ;;
-            '')  # Enter - confirm
-                tput cnorm  # Show cursor
-                echo ""
-                return 0
-                ;;
-        esac
-        
-        draw_checklist $current_index $start_line
+    # Parse selected repos and update REPO_SELECTED array
+    # whiptail returns quoted space-separated list: "repo1" "repo2" "repo3"
+    for i in "${!REPO_NAMES[@]}"; do
+        local name="${REPO_NAMES[$i]}"
+        if echo "$selected" | grep -q "\"$name\""; then
+            REPO_SELECTED[$i]=1
+        else
+            REPO_SELECTED[$i]=0
+        fi
     done
 }
 
@@ -283,26 +217,22 @@ run_interactive_selection() {
 
 # Interactive selection
 if [[ "$INTERACTIVE" == true ]] && [[ $TOTAL_REPOS -gt 0 ]]; then
-    echo -e "${YELLOW}Would you like to select which repositories to include?${NC}"
-    echo "  1) Yes - choose interactively"
-    echo "  2) No  - include all repositories"
-    echo ""
-    read -p "Select option [1/2]: " choice
-    
-    if [[ "$choice" == "1" ]]; then
-        echo ""
+    # Check if whiptail is available
+    if command -v whiptail &>/dev/null; then
         run_interactive_selection
         
         # Count excluded
-        local excluded_count=0
+        excluded_count=0
         for s in "${REPO_SELECTED[@]}"; do
-            [[ $s -eq 0 ]] && ((excluded_count++))
+            [[ $s -eq 0 ]] && ((excluded_count++)) || true
         done
         
         if [[ $excluded_count -gt 0 ]]; then
-            echo ""
             echo -e "${YELLOW}Excluded ${excluded_count} repository(ies)${NC}"
         fi
+    else
+        echo -e "${YELLOW}whiptail not found - including all repositories${NC}"
+        echo -e "${DIM}Install whiptail for interactive selection: sudo apt install whiptail${NC}"
     fi
     echo ""
 fi
@@ -319,6 +249,9 @@ cat > "${OUTPUT_FILE}" << 'EOF'
 # - visibility: public, private, or internal
 # - description: Repository description (optional)
 #
+# Lines starting with "# EXCLUDED:" were deselected during generation
+# To include an excluded repo, remove "# EXCLUDED: " prefix
+#
 # Local path is derived from: ${local_repo_root}/${name}
 # GitLab SSH URL is derived from: git@${gitlab_host}:${gitlab_user}/${name}.git
 # GitHub SSH URL is derived from: git@${github_host}:${github_user}/${name}.git
@@ -329,15 +262,16 @@ EOF
 
 # Write selected repos
 for i in "${!REPO_NAMES[@]}"; do
+    NAME="${REPO_NAMES[$i]}"
+    VISIBILITY="${REPO_VISIBILITIES[$i]}"
+    DESCRIPTION="${REPO_DESCRIPTIONS[$i]}"
+    
     if [[ ${REPO_SELECTED[$i]} -eq 1 ]]; then
-        NAME="${REPO_NAMES[$i]}"
-        VISIBILITY="${REPO_VISIBILITIES[$i]}"
-        DESCRIPTION="${REPO_DESCRIPTIONS[$i]}"
-        
         echo "  Adding: ${NAME} (${VISIBILITY})"
         echo "${NAME}|${VISIBILITY}|${DESCRIPTION}" >> "${OUTPUT_FILE}"
     else
-        echo -e "  ${DIM}Excluded: ${REPO_NAMES[$i]}${NC}"
+        echo -e "  ${DIM}Excluded: ${NAME}${NC}"
+        echo "# EXCLUDED: ${NAME}|${VISIBILITY}|${DESCRIPTION}" >> "${OUTPUT_FILE}"
     fi
 done
 
@@ -351,12 +285,18 @@ TOTAL=$(grep -c '^[^#\[]' "${OUTPUT_FILE}" 2>/dev/null || echo "0")
 PUBLIC=$(grep '|public|' "${OUTPUT_FILE}" | wc -l || echo "0")
 PRIVATE=$(grep '|private|' "${OUTPUT_FILE}" | wc -l || echo "0")
 INTERNAL=$(grep '|internal|' "${OUTPUT_FILE}" | wc -l || echo "0")
+EXCLUDED=$((TOTAL_REPOS - TOTAL))
 
 echo "  Total repositories: ${TOTAL}"
 echo "  Public: ${PUBLIC}"
 echo "  Private: ${PRIVATE}"
 echo "  Internal: ${INTERNAL}"
+[[ $EXCLUDED -gt 0 ]] && echo -e "  ${DIM}Excluded: ${EXCLUDED}${NC}"
 echo ""
-echo -e "${BLUE}Next steps:${NC}"
-echo "  1. Run: ./02-migrate-repos.sh --dry-run"
-echo "  2. Run: ./02-migrate-repos.sh"
+
+# Prompt to run next script
+echo -e "${BLUE}Next step: ./02-migrate-repos.sh${NC}"
+read -p "Run migration script now? [y/N]: " run_next
+if [[ "${run_next,,}" == "y" ]]; then
+    exec "${SCRIPT_DIR}/02-migrate-repos.sh"
+fi

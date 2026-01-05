@@ -255,8 +255,7 @@ main() {
     if [[ $FAILED_COUNT -eq 0 ]]; then
         print_success "All repositories archived successfully!"
         echo ""
-        echo -e "${BOLD}Next steps:${NC}"
-        echo "  • Verify archived repositories on GitLab"
+        echo -e "${BOLD}Info:${NC}"
         echo "  • All repositories now show migration notice"
         echo "  • Repositories are read-only on GitLab"
         echo ""
@@ -264,6 +263,14 @@ main() {
         echo "  Visit: https://${GITLAB_HOST}/${GITLAB_USER}/[repo]/edit"
         echo "  Or use: curl -X POST --header \"PRIVATE-TOKEN: \$TOKEN\" \\"
         echo "          \"https://${GITLAB_HOST}/api/v4/projects/[ID]/unarchive\""
+        
+        # Prompt to run next script
+        echo ""
+        echo -e "${BLUE}Next step: ./06-cleanup.sh${NC}"
+        read -p "Clean up temporary files? [y/N]: " run_next
+        if [[ "${run_next,,}" == "y" ]]; then
+            exec "${SCRIPT_DIR}/06-cleanup.sh"
+        fi
     else
         print_error "Some repositories failed to archive"
         exit 1
