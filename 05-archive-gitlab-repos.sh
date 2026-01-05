@@ -239,9 +239,9 @@ main() {
         # Format: name|visibility|description|gitlab_ssh_url
         IFS='|' read -r name vis desc url <<< "$repo"
         if archive_repository "$name"; then
-            ((SUCCESS_COUNT++))
+            ((SUCCESS_COUNT++)) || true
         else
-            ((FAILED_COUNT++))
+            ((FAILED_COUNT++)) || true
         fi
     done
     
