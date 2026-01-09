@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          scandir: '.'
+          format: gcc
+
+  test:
+    name: Shell Script Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x *.sh
+
+      - name: Verify scripts syntax
+        run: |
+          for script in *.sh; do
+            echo "Checking syntax: $script"
+            bash -n "$script"
+          done
+
+      - name: Test scripts help output
+        run: |
+          for script in *.sh; do
+            if grep -q "\-\-help\|help)" "$script"; then
+              echo "Testing help for: $script"
+              bash "$script" --help || bash "$script" -h || true
+            fi
+          done
